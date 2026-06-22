@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 struct HomeView: View {
     var forceScreen: String? = nil
@@ -9,113 +10,190 @@ struct HomeView: View {
     @State private var showSettings = false
     @State private var showPaywall = false
     @State private var showInsights = false
+    @State private var showAddCard = false
+    @State private var showReview = false
 
     var body: some View {
         NavigationStack {
             ZStack {
                 QMBackground()
-
                 ScrollView {
-                    VStack(spacing: 24) {
-                        // Header
-                        VStack(spacing: 4) {
-                            Text("Tideline")
-                                .font(.largeTitle.weight(.bold))
-                            Text("Ride your daily mood wave")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.top, 8)
+                    VStack(spacing: 20) {
+                        // Due today banner
+                        dueBanner
 
-                        // Today's entry card
-                        GridView()
-                            .padding(.horizontal, 16)
-
-                        // Stats row
+                        // Metric row
                         HStack(spacing: 12) {
-                            MetricTile(
-                                value: appModel.todayEntry.map { "\($0.level)" } ?? "-",
-                                label: "Today"
-                            )
-                            MetricTile(
-                                value: String(format: "%.1f", appModel.sevenDayAverage),
-                                label: "7-day avg"
-                            )
-                            MetricTile(
-                                value: "\(appModel.currentStreak)",
-                                label: "Streak"
-                            )
+                            MetricTile(value: "\(appModel.cards.count)", label: "Total Cards")
+                            MetricTile(value: "\(appModel.dueCards.count)", label: "Due Today")
+                            MetricTile(value: "\(appModel.deckNames.count)", label: "Decks")
                         }
-                        .padding(.horizontal, 16)
 
                         // Pro tile
                         Button {
-                            if store.isPro {
-                                showInsights = true
-                            } else {
-                                showPaywall = true
-                            }
+                            Haptics.tap()
+                            if store.isPro { showInsights = true }
+                            else { showPaywall = true }
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(store.isPro ? "Tideline Pro" : "Unlock Insights")
+                                    Text(store.isPro ? "Retention Insights" : "Recallr Pro")
                                         .font(.headline)
-                                    Text(store.isPro ? "History, dual-wave & trends" : "Multi-month history + dual-wave")
+                                        .foregroundStyle(.primary)
+                                    Text(store.isPro
+                                         ? "Streak, accuracy & history"
+                                         : "Unlimited cards, insights & streaks")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Image(systemName: store.isPro ? "waveform.path.ecg" : "lock.fill")
+                                Image(systemName: store.isPro ? "chart.bar.fill" : "lock.fill")
                                     .foregroundStyle(Color.qmAccent)
-                                    .font(.title3)
                             }
                             .qmCard()
                         }
                         .buttonStyle(.plain)
-                        .padding(.horizontal, 16)
 
-                        Spacer(minLength: 32)
+                        // Deck list
+                        if !appModel.deckNames.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Your Decks")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 4)
+                                ForEach(appModel.deckNames, id: \.self) { deck in
+                                    deckRow(deck: deck)
+                                }
+                            }
+                        } else {
+                            emptyState
+                        }
+
+                        Spacer(minLength: 40)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
                 }
             }
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Recallr")
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button {
+                        Haptics.tap()
                         showSettings = true
                     } label: {
                         Image(systemName: "gearshape")
                             .foregroundStyle(Color.qmAccent)
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Haptics.tap()
+                        showAddCard = true
+                    } label: {
+                        Image(systemName: "plus")
+                            .foregroundStyle(Color.qmAccent)
+                    }
+                }
             }
-            .sheet(isPresented: $showSettings) {
-                SettingsView()
-                    .environmentObject(store)
-                    .environmentObject(appModel)
-            }
-            .sheet(isPresented: $showPaywall) {
-                PaywallView()
-                    .environmentObject(store)
-            }
-            .sheet(isPresented: $showInsights) {
-                InsightsView()
-                    .environmentObject(appModel)
-                    .environmentObject(store)
+            .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showPaywall) { PaywallView() }
+            .sheet(isPresented: $showInsights) { InsightsView() }
+            .sheet(isPresented: $showAddCard, onDismiss: { appModel.reload() }) { AddCardView() }
+            .sheet(isPresented: $showReview, onDismiss: { appModel.reload() }) {
+                ReviewView(cards: appModel.dueCards)
             }
             .onAppear {
-                handleForceScreen()
+                if forceScreen == "review" { showReview = true }
+                else if forceScreen == "add" { showAddCard = true }
+                else if forceScreen == "insights" { showInsights = true }
             }
         }
     }
 
-    private func handleForceScreen() {
-        guard let screen = forceScreen else { return }
-        switch screen {
-        case "paywall": showPaywall = true
-        case "insights": showInsights = true
-        case "settings": showSettings = true
-        default: break
+    // MARK: - Sub-views
+
+    private var dueBanner: some View {
+        Group {
+            if appModel.dueCards.isEmpty {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Color.qmCorrect)
+                    Text("All caught up! Check back tomorrow.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .qmCard()
+            } else {
+                Button {
+                    Haptics.success()
+                    showReview = true
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(appModel.dueCards.count) card\(appModel.dueCards.count == 1 ? "" : "s") due")
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            Text("Tap to start today's review")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "arrow.right.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(Color.qmAccent)
+                    }
+                    .qmCard()
+                }
+                .buttonStyle(.plain)
+            }
         }
+    }
+
+    private func deckRow(deck: String) -> some View {
+        let count = appModel.cards.filter { $0.deckName == deck }.count
+        let due = appModel.dueCards.filter { $0.deckName == deck }.count
+        return HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(deck)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text("\(count) card\(count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if due > 0 {
+                Text("\(due) due")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.qmAccent, in: Capsule())
+            }
+        }
+        .qmCard()
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "rectangle.on.rectangle")
+                .font(.system(size: 48))
+                .foregroundStyle(Color.qmAccent.opacity(0.8))
+            Text("No cards yet")
+                .font(.title3.weight(.semibold))
+            Text("Tap + to create your first flashcard.\nThe app will resurface it on the perfect day.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Add First Card") {
+                Haptics.tap()
+                showAddCard = true
+            }
+            .prominentButton()
+        }
+        .padding(.vertical, 40)
     }
 }

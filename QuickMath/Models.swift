@@ -4,32 +4,40 @@ import SwiftData
 // MARK: - SwiftData models
 
 @Model
-final class WaveEntry {
+final class FlashCard {
     var id: UUID
-    var date: Date
-    var level: Int
-    var partOfDay: String
-    var tag: String?
+    var front: String
+    var back: String
+    var deckName: String
+    var ease: Double          // SM-2 ease factor (default 2.5)
+    var intervalDays: Int     // days until next review
+    var dueDate: Date
+    var lastReviewed: Date?
+    var lapses: Int           // times rated "missed"
 
-    init(id: UUID = UUID(), date: Date = .now, level: Int, partOfDay: String = "day", tag: String? = nil) {
-        self.id = id
-        self.date = date
-        self.level = level
-        self.partOfDay = partOfDay
-        self.tag = tag
+    init(front: String, back: String, deckName: String) {
+        self.id = UUID()
+        self.front = front
+        self.back = back
+        self.deckName = deckName
+        self.ease = 2.5
+        self.intervalDays = 1
+        self.dueDate = Date()
+        self.lastReviewed = nil
+        self.lapses = 0
     }
 }
 
 @Model
-final class TrendCache {
-    var id: UUID
-    var weekStart: Date
-    var average: Double
+final class ReviewSession {
+    var date: Date
+    var cardsReviewed: Int
+    var cardsCorrect: Int
 
-    init(id: UUID = UUID(), weekStart: Date, average: Double) {
-        self.id = id
-        self.weekStart = weekStart
-        self.average = average
+    init(date: Date = .now, cardsReviewed: Int, cardsCorrect: Int) {
+        self.date = date
+        self.cardsReviewed = cardsReviewed
+        self.cardsCorrect = cardsCorrect
     }
 }
 
@@ -40,9 +48,11 @@ final class AppModel: ObservableObject {
     let container: ModelContainer
     weak var store: Store?
 
-    @Published private(set) var recentEntries: [WaveEntry] = []
-    @Published private(set) var todayEntry: WaveEntry? = nil
-    @Published private(set) var allEntries: [WaveEntry] = []
+    @Published private(set) var cards: [FlashCard] = []
+    @Published private(set) var sessions: [ReviewSession] = []
+
+    // Free tier limit
+    static let freeCardLimit = 20
 
     init(container: ModelContainer) {
         self.container = container
@@ -50,78 +60,112 @@ final class AppModel: ObservableObject {
     }
 
     static func makeContainer() -> ModelContainer {
-        let schema = Schema([WaveEntry.self, TrendCache.self])
+        let schema = Schema([FlashCard.self, ReviewSession.self])
+        let config = ModelConfiguration("recallr", schema: schema, isStoredInMemoryOnly: false)
         do {
-            let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
             return try ModelContainer(for: schema, configurations: [config])
         } catch {
             let fallback = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-            return try! ModelContainer(for: schema, configurations: [fallback])
+            return (try? ModelContainer(for: schema, configurations: [fallback]))!
         }
     }
 
     func reload() {
         let ctx = container.mainContext
-        let descriptor = FetchDescriptor<WaveEntry>(sortBy: [SortDescriptor(\.date, order: .reverse)])
-        let fetched = (try? ctx.fetch(descriptor)) ?? []
-        allEntries = fetched
-        recentEntries = Array(fetched.prefix(7))
-        todayEntry = fetched.first(where: { Calendar.current.isDateInToday($0.date) })
+        cards = (try? ctx.fetch(FetchDescriptor<FlashCard>(
+            sortBy: [SortDescriptor(\.dueDate)]))) ?? []
+        sessions = (try? ctx.fetch(FetchDescriptor<ReviewSession>(
+            sortBy: [SortDescriptor(\.date, order: .reverse)]))) ?? []
     }
 
     func refresh() { reload() }
 
-    // MARK: Log energy level
-    func logEnergy(level: Int, partOfDay: String = "day", tag: String? = nil) {
-        let ctx = container.mainContext
-        // Replace existing today entry if same partOfDay
-        if let existing = allEntries.first(where: {
-            Calendar.current.isDateInToday($0.date) && $0.partOfDay == partOfDay
-        }) {
-            existing.level = level
-            existing.tag = tag
-        } else {
-            let entry = WaveEntry(level: level, partOfDay: partOfDay, tag: tag)
-            ctx.insert(entry)
-        }
-        try? ctx.save()
+    // MARK: - Card CRUD
+
+    var isPro: Bool { store?.isPro ?? false }
+
+    var canAddCard: Bool { isPro || cards.count < AppModel.freeCardLimit }
+
+    func addCard(front: String, back: String, deck: String) {
+        guard canAddCard else { return }
+        let card = FlashCard(front: front, back: back, deckName: deck)
+        container.mainContext.insert(card)
+        try? container.mainContext.save()
         reload()
     }
 
-    // MARK: 7-day rolling average
-    var sevenDayAverage: Double {
-        let relevant = recentEntries.prefix(7)
-        guard !relevant.isEmpty else { return 0 }
-        return Double(relevant.map(\.level).reduce(0, +)) / Double(relevant.count)
+    func deleteCard(_ card: FlashCard) {
+        container.mainContext.delete(card)
+        try? container.mainContext.save()
+        reload()
     }
 
-    // MARK: Best time of day (pro)
-    var bestTimeOfDay: String {
-        let mornings = allEntries.filter { $0.partOfDay == "morning" }
-        let evenings = allEntries.filter { $0.partOfDay == "evening" }
-        let morningAvg = mornings.isEmpty ? 0.0 : Double(mornings.map(\.level).reduce(0, +)) / Double(mornings.count)
-        let eveningAvg = evenings.isEmpty ? 0.0 : Double(evenings.map(\.level).reduce(0, +)) / Double(evenings.count)
-        if morningAvg == 0 && eveningAvg == 0 { return "Not enough data" }
-        if morningAvg >= eveningAvg { return "Morning" }
-        return "Evening"
+    // MARK: - Due cards
+
+    var dueCards: [FlashCard] {
+        let now = Date()
+        return cards.filter { $0.dueDate <= now }
     }
 
-    // MARK: Current streak
-    var currentStreak: Int {
+    var deckNames: [String] {
+        Array(Set(cards.map { $0.deckName })).sorted()
+    }
+
+    // MARK: - SM-2 review
+
+    /// Grade: true = "got it", false = "missed it"
+    func review(card: FlashCard, correct: Bool) {
+        if correct {
+            if card.intervalDays == 1 {
+                card.intervalDays = 6
+            } else {
+                card.intervalDays = Int(Double(card.intervalDays) * card.ease)
+            }
+            card.ease = max(1.3, card.ease + 0.1)
+        } else {
+            card.lapses += 1
+            card.intervalDays = 1
+            card.ease = max(1.3, card.ease - 0.2)
+        }
+        card.lastReviewed = Date()
+        card.dueDate = Calendar.current.date(byAdding: .day, value: card.intervalDays, to: .now) ?? .now
+        try? container.mainContext.save()
+    }
+
+    func saveSession(reviewed: Int, correct: Int) {
+        let s = ReviewSession(cardsReviewed: reviewed, cardsCorrect: correct)
+        container.mainContext.insert(s)
+        try? container.mainContext.save()
+        reload()
+    }
+
+    // MARK: - Insights helpers
+
+    var streakDays: Int {
+        guard !sessions.isEmpty else { return 0 }
         var streak = 0
-        var checkDate = Calendar.current.startOfDay(for: .now)
-        let daySet = Set(allEntries.map { Calendar.current.startOfDay(for: $0.date) })
-        while daySet.contains(checkDate) {
+        var date = Calendar.current.startOfDay(for: .now)
+        let sessionDates = Set(sessions.map { Calendar.current.startOfDay(for: $0.date) })
+        while sessionDates.contains(date) {
             streak += 1
-            checkDate = Calendar.current.date(byAdding: .day, value: -1, to: checkDate)!
+            date = Calendar.current.date(byAdding: .day, value: -1, to: date) ?? date
         }
         return streak
     }
 
+    var retentionRate: Double {
+        let total = sessions.reduce(0) { $0 + $1.cardsReviewed }
+        let correct = sessions.reduce(0) { $0 + $1.cardsCorrect }
+        guard total > 0 else { return 0 }
+        return Double(correct) / Double(total)
+    }
+
+    // MARK: - Delete all
+
     func deleteAllData() {
         let ctx = container.mainContext
-        try? ctx.delete(model: WaveEntry.self)
-        try? ctx.delete(model: TrendCache.self)
+        cards.forEach { ctx.delete($0) }
+        sessions.forEach { ctx.delete($0) }
         try? ctx.save()
         reload()
     }

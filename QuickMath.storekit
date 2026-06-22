@@ -9,7 +9,7 @@
       }
     ]
   },
-  "identifier": "LATTICE_STOREKIT_CONFIG",
+  "identifier": "RECALLR_STOREKIT_CONFIG",
   "nonRenewingSubscriptions": [],
   "products": [],
   "settings": {
@@ -18,9 +18,9 @@
   },
   "subscriptionGroups": [
     {
-      "id": "tideline_pro_group",
+      "id": "recallr_pro_group",
       "localizations": [],
-      "name": "Tideline Pro",
+      "name": "Recallr Pro",
       "subscriptions": [
         {
           "adHocOffers": [],
@@ -28,19 +28,19 @@
           "displayPrice": "0.99",
           "familyShareable": false,
           "groupNumber": 1,
-          "internalID": "tideline_pro_monthly_id",
+          "internalID": "recallr_pro_monthly_id",
           "introductoryOffer": null,
           "localizations": [
             {
-              "description": "Unlimited history, dual-wave comparison & daily insights.",
-              "displayName": "Tideline Pro",
+              "description": "Unlimited cards, insights & daily streaks.",
+              "displayName": "Recallr Pro",
               "locale": "en_US"
             }
           ],
-          "productID": "tideline_pro_monthly",
+          "productID": "recallr_pro_monthly",
           "recurringSubscriptionPeriod": "P1M",
-          "referenceName": "Tideline Pro Monthly",
-          "subscriptionGroupID": "tideline_pro_group",
+          "referenceName": "Recallr Pro Monthly",
+          "subscriptionGroupID": "recallr_pro_group",
           "type": "RecurringSubscription"
         }
       ]

@@ -1,80 +1,76 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @EnvironmentObject var store: Store
     @EnvironmentObject var appModel: AppModel
+    @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
 
     @AppStorage("quickmath.theme") private var themeRaw = AppTheme.system.rawValue
-
     @State private var showPaywall = false
     @State private var showDeleteConfirm = false
-
-    private var theme: Binding<AppTheme> {
-        Binding(
-            get: { AppTheme(rawValue: themeRaw) ?? .system },
-            set: { themeRaw = $0.rawValue }
-        )
-    }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 QMBackground()
-
                 List {
                     // Pro section
                     Section("Subscription") {
                         if store.isPro {
                             HStack {
-                                Text("Tideline Pro")
-                                Spacer()
-                                Text("Active")
-                                    .foregroundStyle(Color.qmCorrect)
-                                    .font(.subheadline.weight(.medium))
+                                Image(systemName: "checkmark.seal.fill")
+                                    .foregroundStyle(Color.qmAccent)
+                                Text("Recallr Pro — Active")
+                                    .font(.subheadline.weight(.semibold))
                             }
                             Link("Manage Subscription",
                                  destination: URL(string: "https://apps.apple.com/account/subscriptions")!)
+                                .font(.subheadline)
                                 .foregroundStyle(Color.qmAccent)
                         } else {
-                            Button("Unlock Tideline Pro") {
+                            Button("Upgrade to Pro — \(store.displayPrice)/month") {
+                                Haptics.tap()
                                 showPaywall = true
                             }
                             .foregroundStyle(Color.qmAccent)
+                            Button("Restore Purchase") {
+                                Haptics.tap()
+                                Task { await store.restore() }
+                            }
+                            .foregroundStyle(Color.qmAccent)
                         }
-
-                        Button("Restore Purchase") {
-                            Task { await store.restore() }
-                        }
-                        .foregroundStyle(Color.qmAccent)
                     }
 
                     // Appearance
                     Section("Appearance") {
-                        Picker("Theme", selection: theme) {
-                            ForEach(AppTheme.allCases) { t in
-                                Text(t.label).tag(t)
+                        Picker("Theme", selection: $themeRaw) {
+                            ForEach(AppTheme.allCases) { theme in
+                                Text(theme.label).tag(theme.rawValue)
                             }
                         }
                         .pickerStyle(.segmented)
+                        .listRowBackground(Color.clear)
                     }
 
                     // Legal
                     Section("Legal") {
                         Link("Privacy Policy",
-                             destination: URL(string: "https://shimondeitel.github.io/tideline-site/privacy.html")!)
+                             destination: URL(string: "https://shimondeitel.github.io/recallr-site/privacy.html")!)
+                            .font(.subheadline)
                             .foregroundStyle(Color.qmAccent)
                         Link("Terms of Use",
                              destination: URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!)
+                            .font(.subheadline)
                             .foregroundStyle(Color.qmAccent)
                     }
 
-                    // Data
-                    Section("Data") {
-                        Button("Delete All Data") {
+                    // Danger zone
+                    Section {
+                        Button(role: .destructive) {
                             showDeleteConfirm = true
+                        } label: {
+                            Label("Delete All Data", systemImage: "trash")
                         }
-                        .foregroundStyle(Color.qmWrong)
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -82,25 +78,21 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                 }
             }
-            .sheet(isPresented: $showPaywall) {
-                PaywallView()
-                    .environmentObject(store)
-            }
+            .sheet(isPresented: $showPaywall) { PaywallView() }
             .confirmationDialog(
-                "Delete all Tideline data?",
+                "Delete all cards, decks, and review history?",
                 isPresented: $showDeleteConfirm,
                 titleVisibility: .visible
             ) {
-                Button("Delete All", role: .destructive) {
+                Button("Delete Everything", role: .destructive) {
                     appModel.deleteAllData()
+                    dismiss()
                 }
                 Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This removes all your logged energy entries and cannot be undone.")
             }
         }
     }
